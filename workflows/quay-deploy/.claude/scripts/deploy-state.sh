@@ -14,7 +14,8 @@
 
 set -euo pipefail
 
-STATE_DIR=".claude/deploy-state"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+STATE_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)/deploy-state"
 mkdir -p "$STATE_DIR"
 
 ACTION="${1:?Usage: deploy-state.sh <action> [args]}"
@@ -191,7 +192,7 @@ case "$ACTION" in
     TICK=$(jq '.tick_count' "$FILE")
     NEW_TICK=$((TICK + 1))
 
-    TMP=$(mktemp)
+    TMP=$(mktemp "${STATE_DIR}/.tmp.XXXXXX")
     jq --arg next "$NEXT" \
        --arg now "$NOW" \
        --arg prev "$PREV" \
@@ -212,7 +213,7 @@ case "$ACTION" in
     FILE=$(state_file "$DEPLOY_ID")
     [ -f "$FILE" ] || { echo "No deploy state for ${DEPLOY_ID}" >&2; exit 1; }
 
-    TMP=$(mktemp)
+    TMP=$(mktemp "${STATE_DIR}/.tmp.XXXXXX")
     # Try to parse as JSON (numbers, booleans, arrays), fall back to string
     if echo "$VALUE" | jq . >/dev/null 2>&1; then
       jq --argjson v "$VALUE" --arg f "$FIELD" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
