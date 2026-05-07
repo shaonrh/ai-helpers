@@ -18,7 +18,7 @@ For each new failure, it:
 
 ## Architecture
 
-```
+```text
 ┌──────────────────────────────────┐
 │   konflux-build-triage           │
 │   (supervisor agent)             │

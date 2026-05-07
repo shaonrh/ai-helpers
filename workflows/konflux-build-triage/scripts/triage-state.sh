@@ -19,13 +19,23 @@ mkdir -p "$STATE_DIR"
 COMMAND="${1:?Usage: triage-state.sh <init|is-triaged|record|list|count-component|prune>}"
 shift
 
+# Guard against corrupted state file — re-initialize if jq cannot parse it
+validate_state_file() {
+  if [ -f "$STATE_FILE" ] && ! jq empty "$STATE_FILE" 2>/dev/null; then
+    echo "WARNING: State file corrupted, logging raw content and re-initializing" >&2
+    cat "$STATE_FILE" >&2
+    echo '{"triaged": {}, "last_poll": null, "cycle_count": 0}' > "$STATE_FILE"
+  fi
+}
+
 case "$COMMAND" in
   init)
     if [ ! -f "$STATE_FILE" ]; then
       echo '{"triaged": {}, "last_poll": null, "cycle_count": 0}' > "$STATE_FILE"
       echo "Initialized triage state at ${STATE_FILE}"
     else
-      echo "Triage state already exists (cycle_count: $(jq '.cycle_count' "$STATE_FILE"))"
+      validate_state_file
+      echo "Triage state already exists (cycle_count: $(jq '.cycle_count' "$STATE_FILE" 2>/dev/null || echo '?'))"
     fi
     ;;
 
@@ -34,7 +44,8 @@ case "$COMMAND" in
     if [ ! -f "$STATE_FILE" ]; then
       exit 1
     fi
-    EXISTS=$(jq -r --arg name "$PR_NAME" '.triaged[$name] // empty' "$STATE_FILE")
+    validate_state_file
+    EXISTS=$(jq -r --arg name "$PR_NAME" '.triaged[$name] // empty' "$STATE_FILE" 2>/dev/null || true)
     if [ -n "$EXISTS" ]; then
       exit 0
     else
@@ -48,23 +59,28 @@ case "$COMMAND" in
     COMPONENT="${3:?}"
     SESSION_NAME="${4:?}"
 
+    validate_state_file
     TRIAGED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     TMP=$(mktemp)
-    jq --arg name "$PR_NAME" \
-       --arg ft "$FAILURE_TYPE" \
-       --arg comp "$COMPONENT" \
-       --arg sess "$SESSION_NAME" \
-       --arg at "$TRIAGED_AT" \
-       '.triaged[$name] = {
-          triaged_at: $at,
-          failure_type: $ft,
-          component: $comp,
-          fix_session: $sess,
-          fix_session_status: "spawned"
-        } | .last_poll = $at | .cycle_count += 1' \
-       "$STATE_FILE" > "$TMP"
-    mv "$TMP" "$STATE_FILE"
-    echo "Recorded: ${PR_NAME} → session ${SESSION_NAME}"
+    if jq --arg name "$PR_NAME" \
+         --arg ft "$FAILURE_TYPE" \
+         --arg comp "$COMPONENT" \
+         --arg sess "$SESSION_NAME" \
+         --arg at "$TRIAGED_AT" \
+         '.triaged[$name] = {
+            triaged_at: $at,
+            failure_type: $ft,
+            component: $comp,
+            fix_session: $sess,
+            fix_session_status: "spawned"
+          } | .last_poll = $at | .cycle_count += 1' \
+         "$STATE_FILE" > "$TMP" 2>/dev/null; then
+      mv "$TMP" "$STATE_FILE"
+      echo "Recorded: ${PR_NAME} → session ${SESSION_NAME}"
+    else
+      echo "WARNING: Failed to record triage entry for ${PR_NAME}, state file may be corrupted" >&2
+      rm -f "$TMP"
+    fi
     ;;
 
   count-component)
@@ -73,9 +89,10 @@ case "$COMMAND" in
       echo "0"
       exit 0
     fi
+    validate_state_file
     jq --arg comp "$COMPONENT" \
        '[.triaged | to_entries[] | select(.value.component == $comp)] | length' \
-       "$STATE_FILE"
+       "$STATE_FILE" 2>/dev/null || echo "0"
     ;;
 
   list)
@@ -83,7 +100,8 @@ case "$COMMAND" in
       echo "No triage state file"
       exit 0
     fi
-    jq '.' "$STATE_FILE"
+    validate_state_file
+    jq '.' "$STATE_FILE" 2>/dev/null || cat "$STATE_FILE"
     ;;
 
   prune)
@@ -94,17 +112,22 @@ case "$COMMAND" in
         *) shift ;;
       esac
     done
+    validate_state_file
     DAYS=$(echo "$DURATION" | grep -oP '\d+')
     CUTOFF=$(date -u -d "${DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
              date -u -v-${DAYS}d +%Y-%m-%dT%H:%M:%SZ)
-    BEFORE=$(jq '.triaged | length' "$STATE_FILE")
+    BEFORE=$(jq '.triaged | length' "$STATE_FILE" 2>/dev/null || echo "0")
     TMP=$(mktemp)
-    jq --arg cutoff "$CUTOFF" \
-       '.triaged |= with_entries(select(.value.triaged_at > $cutoff))' \
-       "$STATE_FILE" > "$TMP"
-    mv "$TMP" "$STATE_FILE"
-    AFTER=$(jq '.triaged | length' "$STATE_FILE")
-    echo "Pruned: ${BEFORE} → ${AFTER} entries (removed $(( BEFORE - AFTER )) older than ${DURATION})"
+    if jq --arg cutoff "$CUTOFF" \
+         '.triaged |= with_entries(select(.value.triaged_at > $cutoff))' \
+         "$STATE_FILE" > "$TMP" 2>/dev/null; then
+      mv "$TMP" "$STATE_FILE"
+      AFTER=$(jq '.triaged | length' "$STATE_FILE" 2>/dev/null || echo "0")
+      echo "Pruned: ${BEFORE} → ${AFTER} entries (removed $(( BEFORE - AFTER )) older than ${DURATION})"
+    else
+      echo "WARNING: Failed to prune state file" >&2
+      rm -f "$TMP"
+    fi
     ;;
 
   *)

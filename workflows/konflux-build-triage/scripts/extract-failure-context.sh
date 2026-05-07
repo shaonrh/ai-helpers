@@ -17,7 +17,7 @@ set -euo pipefail
 
 PR_NAME="${1:?Usage: extract-failure-context.sh <pipelinerun-name>}"
 
-PR_JSON=$(kubectl get pipelinerun "$PR_NAME" -n "$KONFLUX_NAMESPACE" -o json 2>/dev/null)
+PR_JSON=$(kubectl get pipelinerun "$PR_NAME" -n "$KONFLUX_NAMESPACE" -o json 2>/dev/null || true)
 if [ -z "$PR_JSON" ]; then
   echo '{"error": "PipelineRun not found", "pipelinerun": "'"$PR_NAME"'"}' >&2
   exit 1

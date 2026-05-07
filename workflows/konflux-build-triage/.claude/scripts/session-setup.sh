@@ -22,13 +22,20 @@ if ! command -v kubectl &>/dev/null; then
   echo "[session-setup] Installing kubectl..."
   KUBECTL_VERSION=$(curl -sL https://dl.k8s.io/release/stable.txt)
   curl -sLO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+  curl -sLO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256"
+  if ! echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check --status 2>/dev/null; then
+    echo "ERROR: kubectl checksum verification failed"
+    rm -f kubectl kubectl.sha256
+    exit 1
+  fi
+  rm -f kubectl.sha256
   chmod +x kubectl
   mv kubectl /usr/local/bin/kubectl 2>/dev/null || {
     mkdir -p ~/.local/bin
     mv kubectl ~/.local/bin/kubectl
     export PATH="$HOME/.local/bin:$PATH"
   }
-  echo "[session-setup] kubectl ${KUBECTL_VERSION} installed"
+  echo "[session-setup] kubectl ${KUBECTL_VERSION} installed (checksum verified)"
 else
   echo "[session-setup] kubectl already available"
 fi

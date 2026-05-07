@@ -11,6 +11,7 @@
 #   FAILURE_LOOKBACK_HOURS  — How far back to look (default: 24)
 #
 # Output: JSON array of failure records to stdout.
+# Kubeconfig: Expects ~/.kube/config to be set up by session-setup.sh.
 
 set -euo pipefail
 
@@ -23,80 +24,97 @@ QUERY_TYPE="${1:?Usage: query-failed-pipelines.sh <builds|ec-tests|all>}"
 CUTOFF=$(date -u -d "${FAILURE_LOOKBACK_HOURS} hours ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
          date -u -v-${FAILURE_LOOKBACK_HOURS}H +%Y-%m-%dT%H:%M:%SZ)
 
-query_failed_builds() {
+# kubectl wrapper: log warning and retry once on failure
+kubectl_get_pipelineruns() {
+  local labels="$1"
   local raw
-  raw=$(kubectl get pipelineruns \
-    -l "pipelines.appstudio.openshift.io/type=build,pipelinesascode.tekton.dev/event-type=push" \
-    -o json \
-    -n "$KONFLUX_NAMESPACE" 2>/dev/null) || { echo "[]"; return; }
 
-  echo "$raw" | jq --arg cutoff "$CUTOFF" '
-    [.items[] |
-      select(.metadata.creationTimestamp > $cutoff) |
-      select(.status.conditions[]? | .type == "Succeeded" and .status == "False") |
-      {
-        name: .metadata.name,
-        failure_type: "build",
-        component: .metadata.labels["appstudio.openshift.io/component"],
-        application: .metadata.labels["appstudio.openshift.io/application"],
-        created: .metadata.creationTimestamp,
-        commit_sha: (
-          .metadata.annotations["build.appstudio.openshift.io/commit-sha"] //
-          .metadata.labels["pipelinesascode.tekton.dev/sha"] //
-          "unknown"
-        ),
-        branch: (
-          .metadata.annotations["build.appstudio.openshift.io/target-branch"] //
-          .metadata.labels["pipelinesascode.tekton.dev/branch"] //
-          "unknown"
-        ),
-        repo_url: (
-          .metadata.annotations["build.appstudio.openshift.io/repo"] //
-          .metadata.labels["pipelinesascode.tekton.dev/url-repository"] //
-          "unknown"
-        ),
-        reason: (.status.conditions[] | select(.type == "Succeeded") | .reason),
-        message: (.status.conditions[] | select(.type == "Succeeded") | .message),
-        child_references: [.status.childReferences[]? | {name: .name, kind: .kind}]
-      }
-    ] | sort_by(.created) | reverse'
+  raw=$(kubectl get pipelineruns -l "$labels" -o json -n "$KONFLUX_NAMESPACE" 2>&1) && {
+    echo "$raw"
+    return 0
+  }
+
+  echo "WARNING: kubectl get pipelineruns failed (labels: ${labels}), retrying..." >&2
+  sleep 5
+  raw=$(kubectl get pipelineruns -l "$labels" -o json -n "$KONFLUX_NAMESPACE" 2>&1) && {
+    echo "$raw"
+    return 0
+  }
+
+  echo "WARNING: kubectl get pipelineruns failed after retry (labels: ${labels}), skipping." >&2
+  echo '{"items":[]}'
+}
+
+JQ_FILTER_BUILDS='
+  [.items[] |
+    select(.metadata.creationTimestamp > $cutoff) |
+    select(.status.conditions[]? | .type == "Succeeded" and .status == "False") |
+    {
+      name: .metadata.name,
+      failure_type: "build",
+      component: .metadata.labels["appstudio.openshift.io/component"],
+      application: .metadata.labels["appstudio.openshift.io/application"],
+      created: .metadata.creationTimestamp,
+      commit_sha: (
+        .metadata.annotations["build.appstudio.openshift.io/commit-sha"] //
+        .metadata.labels["pipelinesascode.tekton.dev/sha"] //
+        "unknown"
+      ),
+      branch: (
+        .metadata.annotations["build.appstudio.openshift.io/target-branch"] //
+        .metadata.labels["pipelinesascode.tekton.dev/branch"] //
+        "unknown"
+      ),
+      repo_url: (
+        .metadata.annotations["build.appstudio.openshift.io/repo"] //
+        .metadata.labels["pipelinesascode.tekton.dev/url-repository"] //
+        "unknown"
+      ),
+      reason: (.status.conditions[] | select(.type == "Succeeded") | .reason),
+      message: (.status.conditions[] | select(.type == "Succeeded") | .message),
+      child_references: [.status.childReferences[]? | {name: .name, kind: .kind}]
+    }
+  ] | sort_by(.created) | reverse'
+
+JQ_FILTER_EC='
+  [.items[] |
+    select(.metadata.creationTimestamp > $cutoff) |
+    select(.status.conditions[]? | .type == "Succeeded" and .status == "False") |
+    {
+      name: .metadata.name,
+      failure_type: "ec_test",
+      component: .metadata.labels["appstudio.openshift.io/component"],
+      application: .metadata.labels["appstudio.openshift.io/application"],
+      scenario: .metadata.labels["test.appstudio.openshift.io/scenario"],
+      created: .metadata.creationTimestamp,
+      commit_sha: (
+        .metadata.labels["pipelinesascode.tekton.dev/sha"] //
+        "unknown"
+      ),
+      branch: (
+        .metadata.labels["pipelinesascode.tekton.dev/branch"] //
+        "unknown"
+      ),
+      repo_url: (
+        .metadata.labels["pipelinesascode.tekton.dev/url-repository"] //
+        "unknown"
+      ),
+      reason: (.status.conditions[] | select(.type == "Succeeded") | .reason),
+      message: (.status.conditions[] | select(.type == "Succeeded") | .message),
+      child_references: [.status.childReferences[]? | {name: .name, kind: .kind}]
+    }
+  ] | sort_by(.created) | reverse'
+
+query_failed_builds() {
+  kubectl_get_pipelineruns \
+    "pipelines.appstudio.openshift.io/type=build,pipelinesascode.tekton.dev/event-type=push" \
+  | jq --arg cutoff "$CUTOFF" "$JQ_FILTER_BUILDS"
 }
 
 query_failed_ec_tests() {
-  local raw
-  raw=$(kubectl get pipelineruns \
-    -l "test.appstudio.openshift.io/scenario" \
-    -o json \
-    -n "$KONFLUX_NAMESPACE" 2>/dev/null) || { echo "[]"; return; }
-
-  echo "$raw" | jq --arg cutoff "$CUTOFF" '
-    [.items[] |
-      select(.metadata.creationTimestamp > $cutoff) |
-      select(.status.conditions[]? | .type == "Succeeded" and .status == "False") |
-      {
-        name: .metadata.name,
-        failure_type: "ec_test",
-        component: .metadata.labels["appstudio.openshift.io/component"],
-        application: .metadata.labels["appstudio.openshift.io/application"],
-        scenario: .metadata.labels["test.appstudio.openshift.io/scenario"],
-        created: .metadata.creationTimestamp,
-        commit_sha: (
-          .metadata.labels["pipelinesascode.tekton.dev/sha"] //
-          "unknown"
-        ),
-        branch: (
-          .metadata.labels["pipelinesascode.tekton.dev/branch"] //
-          "unknown"
-        ),
-        repo_url: (
-          .metadata.labels["pipelinesascode.tekton.dev/url-repository"] //
-          "unknown"
-        ),
-        reason: (.status.conditions[] | select(.type == "Succeeded") | .reason),
-        message: (.status.conditions[] | select(.type == "Succeeded") | .message),
-        child_references: [.status.childReferences[]? | {name: .name, kind: .kind}]
-      }
-    ] | sort_by(.created) | reverse'
+  kubectl_get_pipelineruns \
+    "test.appstudio.openshift.io/scenario" \
+  | jq --arg cutoff "$CUTOFF" "$JQ_FILTER_EC"
 }
 
 case "$QUERY_TYPE" in
