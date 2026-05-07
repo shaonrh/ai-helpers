@@ -17,6 +17,7 @@ set -euo pipefail
 #   configure-cluster.sh deploy-quay <KUBECONFIG> <NAMESPACE> <REGISTRY_NAME>
 #   configure-cluster.sh wait-quay <KUBECONFIG> <NAMESPACE> <REGISTRY_NAME> [TIMEOUT_SECONDS]
 #   configure-cluster.sh verify <KUBECONFIG> <NAMESPACE> <REGISTRY_NAME>
+#   configure-cluster.sh verify-images <KUBECONFIG> <NAMESPACE>
 
 ACTION="${1:?Usage: configure-cluster.sh <action> [args]}"
 shift
@@ -28,7 +29,7 @@ oc_cmd() {
   oc --kubeconfig="$KC" "$@"
 }
 
-# ─── detect-ocp-version ──────────────────────────────────────────────
+# --- detect-ocp-version --------------------------------------------------
 cmd_detect_ocp_version() {
   KC="${1:?Missing KUBECONFIG path}"
   local version
@@ -41,7 +42,7 @@ cmd_detect_ocp_version() {
   echo "$version"
 }
 
-# ─── patch-pull-secret ────────────────────────────────────────────────
+# --- patch-pull-secret ---------------------------------------------------
 cmd_patch_pull_secret() {
   KC="${1:?Missing KUBECONFIG path}"
   local token="${KONFLUX_IMAGE_PULL_TOKEN:?KONFLUX_IMAGE_PULL_TOKEN env var must be set to the image-rbac-proxy bearer token}"
@@ -52,8 +53,6 @@ cmd_patch_pull_secret() {
   existing_secret=$(oc_cmd get secret/pull-secret -n openshift-config \
     -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d)
 
-  # Generate auth entry for the image-rbac-proxy.
-  # Username is arbitrary (proxy ignores it), token is the bearer token.
   local auth_b64
   auth_b64=$(printf 'external-puller:%s' "$token" | base64 | tr -d '\n')
 
@@ -74,12 +73,11 @@ cmd_patch_pull_secret() {
   info "Pull secret patched with image-rbac-proxy credentials."
 }
 
-# ─── apply-mirrors ────────────────────────────────────────────────────
+# --- apply-mirrors -------------------------------------------------------
 cmd_apply_mirrors() {
   KC="${1:?Missing KUBECONFIG path}"
   local quay_ver="${2:?Missing QUAY_VERSION number (e.g. 18 for stable-3.18)}"
 
-  # Detect OCP version to choose IDMS vs ICSP
   local ocp_version
   ocp_version=$(cmd_detect_ocp_version "$KC")
   local ocp_minor
@@ -88,8 +86,9 @@ cmd_apply_mirrors() {
   local tenant="image-rbac-proxy.apps.stone-prd-rh01.pg1f.p1.openshiftapps.com/redhat-user-workloads/quay-eng-tenant"
 
   if [[ "$ocp_minor" -ge 14 ]]; then
-    info "OCP ${ocp_version} detected — using ImageDigestMirrorSet"
-    oc_cmd apply -f - <<EOF
+    info "OCP ${ocp_version} detected — using ImageDigestMirrorSet (NeverContactSource)"
+    # Redirect stdout to stderr: only the mirror-type token goes to stdout (for capture)
+    oc_cmd apply -f - >&2 <<EOF
 apiVersion: config.openshift.io/v1
 kind: ImageDigestMirrorSet
 metadata:
@@ -99,38 +98,48 @@ spec:
   - mirrors:
     - ${tenant}/quay-operator-v3-${quay_ver}
     source: registry.redhat.io/quay/quay-operator-rhel8
+    mirrorSourcePolicy: NeverContactSource
   - mirrors:
     - ${tenant}/quay-quay-v3-${quay_ver}
     source: registry.redhat.io/quay/quay-rhel8
+    mirrorSourcePolicy: NeverContactSource
   - mirrors:
     - ${tenant}/quay-clair-v3-${quay_ver}
     source: registry.redhat.io/quay/clair-rhel8
+    mirrorSourcePolicy: NeverContactSource
   - mirrors:
     - ${tenant}/quay-bridge-operator-v3-${quay_ver}
     source: registry.redhat.io/quay/quay-bridge-operator-rhel8
+    mirrorSourcePolicy: NeverContactSource
   - mirrors:
     - ${tenant}/container-security-operator-v3-${quay_ver}
     source: registry.redhat.io/quay/quay-container-security-operator-rhel8
+    mirrorSourcePolicy: NeverContactSource
   - mirrors:
     - ${tenant}/quay-operator-bundle-v3-${quay_ver}
     source: registry.redhat.io/quay/quay-operator-bundle
+    mirrorSourcePolicy: NeverContactSource
   - mirrors:
     - ${tenant}/container-security-operator-bundle-v3-${quay_ver}
     source: registry.redhat.io/quay/quay-container-security-operator-bundle
+    mirrorSourcePolicy: NeverContactSource
   - mirrors:
     - ${tenant}/quay-bridge-operator-bundle-v3-${quay_ver}
     source: registry.redhat.io/quay/quay-bridge-operator-bundle
+    mirrorSourcePolicy: NeverContactSource
   - mirrors:
     - brew.registry.redhat.io
     source: registry.stage.redhat.io
+    mirrorSourcePolicy: NeverContactSource
   - mirrors:
     - brew.registry.redhat.io
     source: registry-proxy.engineering.redhat.com
+    mirrorSourcePolicy: NeverContactSource
 EOF
     echo "idms"
   else
     info "OCP ${ocp_version} detected — using ImageContentSourcePolicy"
-    oc_cmd apply -f - <<EOF
+    oc_cmd apply -f - >&2 <<EOF
 apiVersion: operator.openshift.io/v1alpha1
 kind: ImageContentSourcePolicy
 metadata:
@@ -172,7 +181,7 @@ EOF
   fi
 }
 
-# ─── wait-mcp ─────────────────────────────────────────────────────────
+# --- wait-mcp ------------------------------------------------------------
 cmd_wait_mcp() {
   KC="${1:?Missing KUBECONFIG path}"
   local timeout="${2:-1200}"
@@ -212,7 +221,7 @@ cmd_wait_mcp() {
   done
 }
 
-# ─── install-storage ──────────────────────────────────────────────────
+# --- install-storage -----------------------------------------------------
 cmd_install_storage() {
   KC="${1:?Missing KUBECONFIG path}"
 
@@ -323,10 +332,22 @@ EOF
   info "Object storage installation complete."
 }
 
-# ─── install-catalog ──────────────────────────────────────────────────
+# --- install-catalog -----------------------------------------------------
 cmd_install_catalog() {
   KC="${1:?Missing KUBECONFIG path}"
   local fbc_image="${2:?Missing FBC image reference}"
+
+  # CatalogSource must use quay.io — OLM's catalog pod runs in openshift-marketplace
+  # and has no credentials for image-rbac-proxy. The IDMS mirrors redirect the
+  # operator/operand images declared inside the catalog; the FBC index image itself
+  # must be publicly pullable from quay.io.
+  local catalog_image="$fbc_image"
+  local proxy_host="image-rbac-proxy.apps.stone-prd-rh01.pg1f.p1.openshiftapps.com"
+  if [[ "$catalog_image" == *"${proxy_host}"* ]]; then
+    catalog_image="${catalog_image//${proxy_host}/quay.io}"
+    info "FBC image rewritten for CatalogSource: ${proxy_host} → quay.io"
+    info "  catalog image: ${catalog_image}"
+  fi
 
   info "Creating CatalogSource for FBC image..."
   oc_cmd apply -f - <<EOF
@@ -337,7 +358,7 @@ metadata:
   namespace: openshift-marketplace
 spec:
   sourceType: grpc
-  image: ${fbc_image}
+  image: ${catalog_image}
   displayName: Konflux Quay RC
   publisher: quay-deploy
   updateStrategy:
@@ -361,7 +382,7 @@ EOF
   die "CatalogSource failed to reach READY state within 3 minutes."
 }
 
-# ─── subscribe ────────────────────────────────────────────────────────
+# --- subscribe -----------------------------------------------------------
 cmd_subscribe() {
   KC="${1:?Missing KUBECONFIG path}"
   local channel="${2:?Missing channel (e.g. stable-3.18)}"
@@ -399,7 +420,7 @@ EOF
   info "Subscription created for quay-operator on channel ${channel}."
 }
 
-# ─── wait-operator ────────────────────────────────────────────────────
+# --- wait-operator -------------------------------------------------------
 cmd_wait_operator() {
   KC="${1:?Missing KUBECONFIG path}"
   local ns="${2:?Missing namespace}"
@@ -439,7 +460,7 @@ cmd_wait_operator() {
   done
 }
 
-# ─── deploy-quay ──────────────────────────────────────────────────────
+# --- deploy-quay ---------------------------------------------------------
 cmd_deploy_quay() {
   KC="${1:?Missing KUBECONFIG path}"
   local ns="${2:?Missing namespace}"
@@ -457,7 +478,7 @@ EOF
   info "QuayRegistry CR created."
 }
 
-# ─── wait-quay ────────────────────────────────────────────────────────
+# --- wait-quay -----------------------------------------------------------
 cmd_wait_quay() {
   KC="${1:?Missing KUBECONFIG path}"
   local ns="${2:?Missing namespace}"
@@ -492,7 +513,7 @@ cmd_wait_quay() {
   done
 }
 
-# ─── verify ───────────────────────────────────────────────────────────
+# --- verify --------------------------------------------------------------
 cmd_verify() {
   KC="${1:?Missing KUBECONFIG path}"
   local ns="${2:?Missing namespace}"
@@ -500,7 +521,6 @@ cmd_verify() {
 
   info "Running health checks on QuayRegistry ${name}..."
 
-  # Get the route
   local route
   route=$(oc_cmd get route -n "$ns" \
     -l "quay-operator/quayregistry=${name}" \
@@ -513,23 +533,25 @@ cmd_verify() {
   local quay_url="https://${route}"
   info "Quay route: ${quay_url}"
 
-  # Health check
+  # Health check — fail fast if unreachable or unexpected payload
   local health_status
-  health_status=$(curl -sk "${quay_url}/health/instance" 2>/dev/null || true)
+  health_status=$(curl -sk --connect-timeout 10 --max-time 30 \
+    "${quay_url}/health/instance") || die "Health endpoint unreachable at ${quay_url}/health/instance"
   if echo "$health_status" | jq -e '.data // .status' >/dev/null 2>&1; then
     info "Health check: OK"
     echo "$health_status" | jq -r '.data // .status' 2>/dev/null || true
   else
-    info "Health check: could not parse response (may still be starting)"
+    die "Health check returned unexpected payload: ${health_status}"
   fi
 
-  # Check login page
+  # Login page — fail fast if unreachable or Quay not present
   local login_page
-  login_page=$(curl -sk "${quay_url}/" 2>/dev/null || true)
+  login_page=$(curl -sk --connect-timeout 10 --max-time 30 \
+    "${quay_url}/") || die "Login page unreachable at ${quay_url}/"
   if echo "$login_page" | grep -qi "quay"; then
     info "Login page: accessible"
   else
-    info "Login page: could not verify (may still be starting)"
+    die "Login page verification failed — 'quay' not found in response from ${quay_url}/"
   fi
 
   echo ""
@@ -538,7 +560,58 @@ cmd_verify() {
   echo "Health endpoint: ${quay_url}/health/instance"
 }
 
-# ─── dispatch ─────────────────────────────────────────────────────────
+# --- verify-images -------------------------------------------------------
+cmd_verify_images() {
+  KC="${1:?Missing KUBECONFIG path}"
+  local ns="${2:?Missing namespace}"
+
+  info "Checking pod image sources in ${ns} — expecting Konflux images from image-rbac-proxy..."
+
+  local fail_count=0 ok_count=0 skip_count=0
+
+  while IFS= read -r line; do
+    local pod container image_id
+    pod=$(echo "$line" | jq -r '.pod')
+    container=$(echo "$line" | jq -r '.container')
+    image_id=$(echo "$line" | jq -r '.imageID // ""')
+
+    if [[ -z "$image_id" ]]; then
+      continue
+    fi
+
+    if echo "$image_id" | grep -q "image-rbac-proxy"; then
+      info "  OK   ${pod}/${container} <- Konflux (image-rbac-proxy)"
+      ok_count=$((ok_count + 1))
+    elif echo "$image_id" | grep -q "registry.redhat.io"; then
+      info "  FAIL ${pod}/${container} <- registry.redhat.io (GA build, not Konflux RC!)"
+      info "       imageID: ${image_id}"
+      fail_count=$((fail_count + 1))
+    else
+      local registry
+      registry=$(echo "$image_id" | cut -d/ -f1)
+      info "  SKIP ${pod}/${container} <- ${registry} (not a mirrored Quay image)"
+      skip_count=$((skip_count + 1))
+    fi
+  done < <(oc_cmd get pods -n "$ns" -o json | jq -c '
+    .items[] | .metadata.name as $pod |
+    .status.containerStatuses[]? |
+    {pod: $pod, container: .name, imageID: .imageID}
+  ')
+
+  info "Image source summary: ${ok_count} from Konflux, ${fail_count} from GA registry, ${skip_count} from other"
+
+  if [[ "$fail_count" -gt 0 ]]; then
+    die "${fail_count} container(s) pulled GA images from registry.redhat.io — IDMS mirror auth may be broken or NeverContactSource not applied"
+  fi
+
+  if [[ "$ok_count" -eq 0 ]]; then
+    die "No containers found pulling from image-rbac-proxy — check that IDMS mirrors are applied and pull secret is patched"
+  fi
+
+  info "Image verification passed: all Quay containers are running Konflux RC images."
+}
+
+# --- dispatch ------------------------------------------------------------
 case "$ACTION" in
   detect-ocp-version) cmd_detect_ocp_version "$@" ;;
   patch-pull-secret)  cmd_patch_pull_secret "$@" ;;
@@ -551,11 +624,12 @@ case "$ACTION" in
   deploy-quay)        cmd_deploy_quay "$@" ;;
   wait-quay)          cmd_wait_quay "$@" ;;
   verify)             cmd_verify "$@" ;;
+  verify-images)      cmd_verify_images "$@" ;;
   *)
     echo "Unknown action: ${ACTION}" >&2
     echo "Actions: detect-ocp-version, patch-pull-secret, apply-mirrors, wait-mcp," >&2
     echo "         install-storage, install-catalog, subscribe, wait-operator," >&2
-    echo "         deploy-quay, wait-quay, verify" >&2
+    echo "         deploy-quay, wait-quay, verify, verify-images" >&2
     exit 1
     ;;
 esac

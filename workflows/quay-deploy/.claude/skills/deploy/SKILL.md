@@ -281,6 +281,10 @@ On success, record the route:
 QUAY_ROUTE=$(oc --kubeconfig="$KUBECONFIG_PATH" get route -n quay \
   -l quay-operator/quayregistry=example-registry \
   -o jsonpath='{.items[0].spec.host}' 2>/dev/null || true)
+if [[ -z "$QUAY_ROUTE" ]]; then
+  echo "ERROR: Quay route not found after WAIT_QUAY — check QuayRegistry status" >&2
+  exit 1
+fi
 bash .claude/scripts/deploy-state.sh set $DEPLOY_ID quay_route "https://$QUAY_ROUTE"
 ```
 
@@ -292,11 +296,19 @@ On timeout, increment `retry_count`. If >= 3, stop and ask user.
 
 ### VERIFY
 
-Run health checks on the deployed Quay instance.
+Run health checks on the deployed Quay instance, then verify that all running
+Quay containers are pulling images from Konflux (image-rbac-proxy) and not from
+the GA registry (registry.redhat.io). This catches silent IDMS fallback before
+UI validation.
 
 ```bash
 bash .claude/scripts/configure-cluster.sh verify "$KUBECONFIG_PATH" "quay" "example-registry"
+bash .claude/scripts/configure-cluster.sh verify-images "$KUBECONFIG_PATH" "quay"
 ```
+
+`verify` fails fast if Quay is unhealthy. `verify-images` fails if any container
+pulled from `registry.redhat.io` instead of `image-rbac-proxy` — meaning the
+IDMS mirrors or pull secret auth is broken and the RC is not what's running.
 
 → advance to **VALIDATE_UI**
 
@@ -325,6 +337,10 @@ double-prefixing `https://`):
 
 ```bash
 QUAY_URL=$(bash .claude/scripts/deploy-state.sh read $DEPLOY_ID | jq -r '.quay_route')
+if [[ -z "$QUAY_URL" || "$QUAY_URL" == "null" ]]; then
+  echo "ERROR: quay_route is missing from persisted state — cannot navigate" >&2
+  exit 1
+fi
 npx @playwright/cli goto "$QUAY_URL"
 ```
 
