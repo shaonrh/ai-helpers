@@ -84,7 +84,7 @@ case "$ACTION" in
     fi
 
     # Auto-detect channel if not provided
-    local channel_source="explicit"
+    channel_source="explicit"
     if [[ -z "$CHANNEL" ]]; then
       CHANNEL=$(detect_channel "$FBC_IMAGE")
       if [[ -z "$CHANNEL" ]]; then
@@ -179,6 +179,10 @@ case "$ACTION" in
   advance)
     DEPLOY_ID="${1:?Missing deploy ID}"
     NEXT="${2:?Missing next state}"
+    case "$NEXT" in
+      PROVISION|CONFIGURE_PULL_SECRETS|APPLY_MIRRORS|WAIT_MCP|INSTALL_STORAGE|       INSTALL_CATALOG|SUBSCRIBE|WAIT_OPERATOR|DEPLOY_QUAY|WAIT_QUAY|VERIFY|       VALIDATE_UI|VALIDATE_FEATURE|COMPLETE) ;;
+      *) echo "ERROR: invalid next state: ${NEXT}" >&2; exit 1 ;;
+    esac
     FILE=$(state_file "$DEPLOY_ID")
     [ -f "$FILE" ] || { echo "No deploy state for ${DEPLOY_ID}" >&2; exit 1; }
 
