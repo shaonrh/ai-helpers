@@ -95,6 +95,7 @@ case "$ACTION" in
       channel_source="auto-detected"
     fi
 
+    TMP=$(mktemp "${STATE_DIR}/.tmp.XXXXXX")
     jq -n \
       --arg deploy_id "$DEPLOY_ID" \
       --arg state "PROVISION" \
@@ -138,7 +139,7 @@ case "$ACTION" in
         artifacts: [],
         retry_count: 0,
         history: []
-      }' > "$FILE"
+      }' > "$TMP" && mv "$TMP" "$FILE"
 
     echo "Deploy state initialized: ${DEPLOY_ID} → PROVISION (mode: ${MODE})"
     echo "Channel: ${CHANNEL} (${channel_source})"
@@ -181,7 +182,7 @@ case "$ACTION" in
     DEPLOY_ID="${1:?Missing deploy ID}"
     NEXT="${2:?Missing next state}"
     case "$NEXT" in
-      PROVISION|CONFIGURE_PULL_SECRETS|APPLY_MIRRORS|WAIT_MCP|INSTALL_STORAGE|       INSTALL_CATALOG|SUBSCRIBE|WAIT_OPERATOR|DEPLOY_QUAY|WAIT_QUAY|VERIFY|       VALIDATE_UI|VALIDATE_FEATURE|COMPLETE) ;;
+      PROVISION|CONFIGURE_PULL_SECRETS|APPLY_MIRRORS|WAIT_MCP|INSTALL_STORAGE|INSTALL_CATALOG|SUBSCRIBE|WAIT_OPERATOR|DEPLOY_QUAY|WAIT_QUAY|VERIFY|VALIDATE_UI|VALIDATE_FEATURE|COMPLETE) ;;
       *) echo "ERROR: invalid next state: ${NEXT}" >&2; exit 1 ;;
     esac
     FILE=$(state_file "$DEPLOY_ID")
