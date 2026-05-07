@@ -61,12 +61,18 @@ case "$ACTION" in
     MODE="auto"
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --fbc-image) FBC_IMAGE="$2"; shift 2 ;;
-        --channel) CHANNEL="$2"; shift 2 ;;
-        --ocp-version) OCP_VERSION="$2"; shift 2 ;;
-        --kubeconfig) KUBECONFIG_PATH="$2"; shift 2 ;;
-        --feature) FEATURE="$2"; shift 2 ;;
-        --mode) MODE="$2"; shift 2 ;;
+        --fbc-image|--channel|--ocp-version|--kubeconfig|--feature|--mode)
+          [[ $# -ge 2 && "${2:-}" != --* ]] || { echo "ERROR: $1 requires a value" >&2; exit 1; }
+          case "$1" in
+            --fbc-image) FBC_IMAGE="$2" ;;
+            --channel) CHANNEL="$2" ;;
+            --ocp-version) OCP_VERSION="$2" ;;
+            --kubeconfig) KUBECONFIG_PATH="$2" ;;
+            --feature) FEATURE="$2" ;;
+            --mode) MODE="$2" ;;
+          esac
+          shift 2
+          ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
       esac
     done
@@ -181,6 +187,9 @@ case "$ACTION" in
   advance)
     DEPLOY_ID="${1:?Missing deploy ID}"
     NEXT="${2:?Missing next state}"
+    LOCK_FILE="${STATE_DIR}/${DEPLOY_ID}.lock"
+    exec 9>"$LOCK_FILE"
+    flock 9
     case "$NEXT" in
       PROVISION|CONFIGURE_PULL_SECRETS|APPLY_MIRRORS|WAIT_MCP|INSTALL_STORAGE|INSTALL_CATALOG|SUBSCRIBE|WAIT_OPERATOR|DEPLOY_QUAY|WAIT_QUAY|VERIFY|VALIDATE_UI|VALIDATE_FEATURE|COMPLETE) ;;
       *) echo "ERROR: invalid next state: ${NEXT}" >&2; exit 1 ;;
@@ -211,6 +220,9 @@ case "$ACTION" in
     DEPLOY_ID="${1:?Missing deploy ID}"
     FIELD="${2:?Missing field}"
     VALUE="${3:?Missing value}"
+    LOCK_FILE="${STATE_DIR}/${DEPLOY_ID}.lock"
+    exec 9>"$LOCK_FILE"
+    flock 9
     FILE=$(state_file "$DEPLOY_ID")
     [ -f "$FILE" ] || { echo "No deploy state for ${DEPLOY_ID}" >&2; exit 1; }
 
