@@ -31,9 +31,9 @@ Create a session using the `acp_create_session` MCP tool with:
 - **session_name**: `autofix-<issue-key>` (lowercased, e.g. `autofix-projquay-12345`)
 - **display_name**: `Autofix <ISSUE-KEY>: <summary>`
 - **initial_prompt**: The issue key and instructions to begin work (e.g. `/start <ISSUE-KEY>`)
-- **repos**: `[{"url": "https://github.com/${SUB_AGENT_WORKFLOW_REPO}", "branch": "master"}]`
-- **workflow_git_url**: `https://github.com/${SUB_AGENT_WORKFLOW_REPO}`
-- **workflow_path**: `${SUB_AGENT_WORKFLOW_PATH}`
+- **repos**: `[{"url": "https://github.com/quay/quay", "branch": "master"}]`
+- **workflow_git_url**: `https://github.com/quay/quay`
+- **workflow_path**: `agent_docs/workflow.md`
 
 Record the returned session ID.
 
