@@ -153,21 +153,21 @@ case "$ACTION" in
 
   list)
     # List all active (non-COMPLETE) deployments, most recent first
-    if [ -z "$(ls -A "$STATE_DIR" 2>/dev/null)" ]; then
-      echo "No active deployments."
-      exit 0
-    fi
+    _list_tmp=$(mktemp)
     for f in "$STATE_DIR"/*.json; do
       [ -f "$f" ] || continue
-      local_id=$(jq -r '.deploy_id' "$f")
-      local_state=$(jq -r '.state' "$f")
-      [[ "$local_state" == "COMPLETE" ]] && continue
-      local_image=$(jq -r '.fbc_image' "$f")
-      local_updated=$(jq -r '.last_updated' "$f")
-      local_tick=$(jq '.tick_count' "$f")
-      echo "${local_id}  state=${local_state}  tick=#${local_tick}  updated=${local_updated}"
-      echo "  image=${local_image}"
+      jq -r 'select(.state != "COMPLETE") | .last_updated + "\t" + .deploy_id + "\t" + .state + "\t" + (.tick_count | tostring) + "\t" + .fbc_image' "$f" >> "$_list_tmp"
     done
+    if [ ! -s "$_list_tmp" ]; then
+      echo "No active deployments."
+      rm -f "$_list_tmp"
+      exit 0
+    fi
+    sort -t$'\t' -k1 -r "$_list_tmp" | while IFS=$'\t' read -r _updated _id _state _tick _image; do
+      echo "${_id}  state=${_state}  tick=#${_tick}  updated=${_updated}"
+      echo "  image=${_image}"
+    done
+    rm -f "$_list_tmp"
     ;;
 
   read)
