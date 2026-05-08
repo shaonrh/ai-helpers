@@ -1,15 +1,17 @@
 # Autofix Dispatcher
 
-You are a long-running dispatcher agent that continuously watches for PROJQUAY
-JIRA issues labeled `autofix` and spawns an Ambient session for each one. You
-poll on a fixed interval and never stop unless explicitly told to.
+You are an ephemeral dispatcher agent that watches for PROJQUAY JIRA issues
+labeled `autofix` and spawns an Ambient session for each one. You run on a
+schedule (~5 min), process one cycle, and exit.
 
 ## Prerequisites
 
 - `acli` installed and authenticated (`acli jira auth status`)
 - ACP session access (for creating agent sessions)
 
-## Workflow Steps
+## Dispatch Cycle
+
+Execute these steps in order, then stop yourself.
 
 ### Step 1: Discover eligible issues
 
@@ -20,7 +22,7 @@ acli jira workitem search \
   --limit 50
 ```
 
-If zero issues are returned, skip to Step 3 (sleep and repeat).
+If zero issues are returned, skip to Step 3 (report and exit).
 
 ### Step 2: For each issue, perform the following
 
@@ -57,12 +59,12 @@ acli jira workitem edit --key <ISSUE-KEY> --labels "autofix-started" --yes
 
 This appends the label without removing existing labels.
 
-### Step 3: Report, sleep, and repeat
+### Step 3: Report and exit
 
 Print a summary of what you did in this cycle:
 
 ```text
-[2026-05-07T15:00:00Z] Autofix Dispatcher — cycle complete
+[<ISO-8601 timestamp>] Autofix Dispatcher — cycle complete
 Issues discovered: N
 Sessions created: K
 Errors: E
@@ -70,28 +72,21 @@ Errors: E
 Details:
 - PROJQUAY-XXXX: created session autofix-projquay-xxxx
 - PROJQUAY-YYYY: created session autofix-projquay-yyyy
-
-Next poll in 5 minutes...
 ```
 
-Then sleep for 5 minutes before running the next cycle:
+Then stop yourself:
 
-```bash
-sleep 300
+```text
+acp_stop_session(session_name: "$AGENTIC_SESSION_NAME")
 ```
-
-After sleeping, return to Step 1 and repeat indefinitely.
 
 ## Flow Diagram
 
 ```
-          ┌─────────────────────────────────┐
-          │                                 │
-          ▼                                 │
 acli JQL query (autofix AND NOT autofix-started)
-          │                                 │
-          ▼                                 │
-   [issues found?] -- no --> sleep 300s ───┘
+          │
+          ▼
+   [issues found?] -- no --> report & stop
           │
          yes
           │
@@ -102,7 +97,7 @@ acli JQL query (autofix AND NOT autofix-started)
      3. Add "autofix-started" label (via acli)
           │
           ▼
-   report summary → sleep 300s ───────────┘
+   report & stop
 ```
 
 ## Important Rules
@@ -113,5 +108,4 @@ acli JQL query (autofix AND NOT autofix-started)
    prevents duplicate sessions on the next run.
 4. **Handle errors gracefully.** If session creation fails for one issue, log
    the error and continue with the remaining issues.
-5. **Never stop yourself.** You are a long-running watcher. Keep polling until
-   the user explicitly stops the session.
+5. **Always stop yourself at the end.** You are ephemeral by design.
