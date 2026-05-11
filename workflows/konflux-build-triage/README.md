@@ -52,7 +52,7 @@ triaged in a previous run. No external state file is needed.
 | `KONFLUX_NAMESPACE` | `quay-eng-tenant` | K8s namespace |
 | `KONFLUX_KUBECONFIG_DATA` | — | Base64-encoded kubeconfig |
 | `MAX_TRIAGE_PER_COMPONENT` | `3` | Cap sessions per component |
-| `EXCLUDE_APP_REGEX` | — | Regex to exclude applications (e.g. `-dev$`) |
+| `EXCLUDE_APP_REGEX` | `-dev$` | Regex to exclude applications (e.g. `-dev$`) |
 
 ## Usage
 

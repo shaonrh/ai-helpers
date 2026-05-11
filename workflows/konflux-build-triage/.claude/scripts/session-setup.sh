@@ -10,9 +10,10 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-CLAUDE_DIR="${REPO_ROOT}/.claude"
-LOLA_REQ="${REPO_ROOT}/.lola-req"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKFLOW_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+CLAUDE_DIR="${WORKFLOW_DIR}/.claude"
+LOLA_REQ="${WORKFLOW_DIR}/.lola-req"
 LOLA="uvx --python 3.13 --from lola-ai lola"
 NAMESPACE="${KONFLUX_NAMESPACE:-quay-eng-tenant}"
 
@@ -21,14 +22,23 @@ NAMESPACE="${KONFLUX_NAMESPACE:-quay-eng-tenant}"
 if ! command -v oc &>/dev/null; then
   echo "[session-setup] Installing oc (OpenShift CLI)..."
   OC_URL="https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz"
-  if curl -sL "$OC_URL" | tar xz -C /tmp oc 2>/dev/null; then
-    chmod +x /tmp/oc
-    mv /tmp/oc /usr/local/bin/oc 2>/dev/null || {
-      mkdir -p ~/.local/bin
-      mv /tmp/oc ~/.local/bin/oc
-      export PATH="$HOME/.local/bin:$PATH"
-    }
-    echo "[session-setup] oc $(oc version --client -o json 2>/dev/null | jq -r '.releaseClientVersion // "installed"') installed"
+  OC_SHA_URL="https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/sha256sum.txt"
+  if curl -sL "$OC_URL" -o /tmp/openshift-client-linux.tar.gz 2>/dev/null \
+     && curl -sL "$OC_SHA_URL" -o /tmp/oc.sha256sum 2>/dev/null; then
+    if grep "openshift-client-linux.tar.gz" /tmp/oc.sha256sum | (cd /tmp && sha256sum --check --status 2>/dev/null); then
+      tar xz -C /tmp -f /tmp/openshift-client-linux.tar.gz oc 2>/dev/null
+      rm -f /tmp/openshift-client-linux.tar.gz /tmp/oc.sha256sum
+      chmod +x /tmp/oc
+      mv /tmp/oc /usr/local/bin/oc 2>/dev/null || {
+        mkdir -p ~/.local/bin
+        mv /tmp/oc ~/.local/bin/oc
+        export PATH="$HOME/.local/bin:$PATH"
+      }
+      echo "[session-setup] oc $(oc version --client -o json 2>/dev/null | jq -r '.releaseClientVersion // "installed"') installed (checksum verified)"
+    else
+      echo "WARNING: oc checksum verification failed — skipping installation"
+      rm -f /tmp/openshift-client-linux.tar.gz /tmp/oc.sha256sum
+    fi
   else
     echo "WARNING: Failed to download oc CLI — check-build-health.sh requires oc"
   fi
@@ -85,14 +95,29 @@ if ! kubectl ka version &>/dev/null 2>&1; then
     | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//' || echo "")
   if [ -n "$KA_VERSION" ]; then
     KA_URL="https://github.com/kubearchive/kubearchive/releases/download/${KA_VERSION}/kubectl-ka-linux-amd64.tar.gz"
-    if curl -sL "$KA_URL" | tar xz -C /tmp kubectl-ka 2>/dev/null; then
-      chmod +x /tmp/kubectl-ka
-      mv /tmp/kubectl-ka /usr/local/bin/kubectl-ka 2>/dev/null || {
-        mkdir -p ~/.local/bin
-        mv /tmp/kubectl-ka ~/.local/bin/kubectl-ka
-        export PATH="$HOME/.local/bin:$PATH"
-      }
-      echo "[session-setup] kubectl-ka ${KA_VERSION} installed"
+    KA_SHA_URL="${KA_URL}.sha256"
+    if curl -sL "$KA_URL" -o /tmp/kubectl-ka.tar.gz 2>/dev/null; then
+      if curl -sL "$KA_SHA_URL" -o /tmp/kubectl-ka.sha256 2>/dev/null \
+         && grep -q "[0-9a-f]" /tmp/kubectl-ka.sha256 2>/dev/null; then
+        if ! (cd /tmp && sed "s|kubectl-ka-linux-amd64.tar.gz|kubectl-ka.tar.gz|" kubectl-ka.sha256 | sha256sum --check --status 2>/dev/null); then
+          echo "WARNING: kubectl-ka checksum verification failed — skipping installation"
+          rm -f /tmp/kubectl-ka.tar.gz /tmp/kubectl-ka.sha256
+          KA_VERSION=""
+        fi
+      else
+        echo "[session-setup] No kubectl-ka checksum available — installing without verification"
+      fi
+      if [ -n "$KA_VERSION" ]; then
+        tar xz -C /tmp -f /tmp/kubectl-ka.tar.gz kubectl-ka 2>/dev/null
+        rm -f /tmp/kubectl-ka.tar.gz /tmp/kubectl-ka.sha256
+        chmod +x /tmp/kubectl-ka
+        mv /tmp/kubectl-ka /usr/local/bin/kubectl-ka 2>/dev/null || {
+          mkdir -p ~/.local/bin
+          mv /tmp/kubectl-ka ~/.local/bin/kubectl-ka
+          export PATH="$HOME/.local/bin:$PATH"
+        }
+        echo "[session-setup] kubectl-ka ${KA_VERSION} installed"
+      fi
     else
       echo "WARNING: Failed to download kubectl-ka — KubeArchive fallback unavailable"
     fi
@@ -139,7 +164,7 @@ else
     else
       $LOLA mod add "$url" --name "$name" 2>&1 | tail -1
     fi
-    $LOLA install "$name" -a claude-code --scope project --force "$REPO_ROOT" 2>&1
+    $LOLA install "$name" -a claude-code --scope project --force "$WORKFLOW_DIR" 2>&1
   done < "$LOLA_REQ"
 
   if [ -n "$(ls -A "${CLAUDE_DIR}/skills" 2>/dev/null)" ]; then

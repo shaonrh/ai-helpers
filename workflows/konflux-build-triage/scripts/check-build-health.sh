@@ -120,7 +120,7 @@ query_component() {
 
   local response
   response=$(curl -s -f -H "Authorization: Bearer ${TOKEN}" \
-    "${KA_HOST}/apis/tekton.dev/v1/namespaces/${NAMESPACE}/pipelineruns?labelSelector=${encoded_label}&limit=1" 2>/dev/null \
+    "${KA_HOST}/apis/tekton.dev/v1/namespaces/${NAMESPACE}/pipelineruns?labelSelector=${encoded_label}&limit=20" 2>/dev/null \
     | tr -d '\000-\010\013\014\016-\037') || true
 
   if [[ -z "$response" ]]; then
@@ -132,9 +132,9 @@ query_component() {
   status=$(echo "$response" | jq -r '
     if (.items | length) == 0 then "null\t\t"
     else
-      (.items[0] |
-        (if ((.status.conditions // [])[] | select(.type == "Succeeded") | .status) == "False" then "true"
-         elif ((.status.conditions // [])[] | select(.type == "Succeeded") | .status) == "True" then "false"
+      ((.items | max_by(.metadata.creationTimestamp)) |
+        (if (first(.status.conditions // [] | .[] | select(.type == "Succeeded")) | .status) == "False" then "true"
+         elif (first(.status.conditions // [] | .[] | select(.type == "Succeeded")) | .status) == "True" then "false"
          else "null" end) + "\t" +
         (.metadata.creationTimestamp // "") + "\t" +
         (.metadata.name // ""))
