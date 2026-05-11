@@ -34,6 +34,7 @@
           {
             "type": "command",
             "command": ".claude/scripts/check-embargo.sh",
+            "if": "Bash(git *)",
             "timeout": 30
           },
           {
@@ -50,6 +51,12 @@
           },
           {
             "type": "command",
+            "command": ".claude/scripts/coderabbit-review-gate.sh",
+            "if": "Bash(gh pr create *)",
+            "timeout": 120
+          },
+          {
+            "type": "command",
             "command": ".claude/scripts/validate-commit-msg.sh",
             "if": "Bash(git commit *)",
             "timeout": 5
@@ -63,7 +70,19 @@
         "hooks": [
           {
             "type": "command",
+            "command": ".claude/scripts/notify-pr-created.sh",
+            "if": "Bash(gh pr create *)",
+            "timeout": 10
+          },
+          {
+            "type": "command",
             "command": ".claude/scripts/check-target-version.sh",
+            "if": "Bash(git push *)",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": ".claude/scripts/notify-push.sh",
             "if": "Bash(git push *)",
             "timeout": 15
           }
