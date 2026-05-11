@@ -4,8 +4,7 @@
 # 1. Installs oc (OpenShift CLI) for cluster auth and component queries
 # 2. Installs kubectl and configures kubeconfig from KONFLUX_KUBECONFIG_DATA
 # 3. Installs kubectl-ka (KubeArchive plugin) for historical PipelineRun data
-# 4. Installs notebooklm-mcp-cli for NotebookLM MCP access
-# 5. Installs plugins via Lola (.lola-req: konflux-ci/skills + dev plugin)
+# 4. Installs plugins via Lola (.lola-req: konflux-ci/skills)
 #
 # Must be committed directly — symlinks do not survive ACP hydrate.sh.
 
@@ -115,21 +114,7 @@ if command -v kubectl &>/dev/null && [ -f ~/.kube/config ]; then
   fi
 fi
 
-# ── 5. Install notebooklm-mcp-cli ───────────────────────────────────────────
-
-if ! command -v notebooklm-mcp &>/dev/null; then
-  echo "[session-setup] Installing notebooklm-mcp-cli..."
-  uv tool install notebooklm-mcp-cli 2>&1 | tail -3
-  echo "[session-setup] notebooklm-mcp-cli installed"
-else
-  echo "[session-setup] notebooklm-mcp-cli already available"
-fi
-
-if [ -z "${NOTEBOOKLM_COOKIES:-}" ]; then
-  echo "WARNING: NOTEBOOKLM_COOKIES not set — NotebookLM consultation will be skipped (graceful degradation)"
-fi
-
-# ── 6. Install plugins via Lola ──────────────────────────────────────────────
+# ── 5. Install plugins via Lola ──────────────────────────────────────────────
 
 if [ ! -f "$LOLA_REQ" ]; then
   echo "[session-setup] No .lola-req found, skipping plugin install"
