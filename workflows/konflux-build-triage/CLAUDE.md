@@ -53,8 +53,11 @@ acp_list_sessions(search="fix-", include_completed=true)
 ```
 
 To deduplicate: compute the session name and check if it appears in
-the list. To check the triage cap: count sessions whose name starts
-with `fix-<component>-`.
+the list (any phase). To check the triage cap: count only **active**
+sessions (Running, Pending, Creating) whose name starts with
+`fix-<component>-`. Do not count Completed, Failed, or Stopped sessions
+— a component with 3 successfully merged fixes must not be permanently
+suppressed.
 
 ## Pipeline Steps
 
@@ -110,9 +113,12 @@ fix-<component>-<first-8-chars-of-md5-of-pipelinerun-name>
 **b. Deduplicate:** Check if this session name exists in the Step 1
 list. If it does, mark as "already triaged" and skip.
 
-**c. Triage cap:** Count sessions in the Step 1 list whose name starts
-with `fix-<component>-`. If count >= `MAX_TRIAGE_PER_COMPONENT`
-(default 3), log a warning and skip. Do NOT spawn another session.
+**c. Triage cap:** Count **active** sessions (phase = Running, Pending,
+or Creating) in the Step 1 list whose name starts with
+`fix-<component>-`. If count >= `MAX_TRIAGE_PER_COMPONENT` (default 3),
+log a warning and skip. Do NOT spawn another session. Completed, Failed,
+and Stopped sessions are excluded — they represent resolved or abandoned
+work, not live capacity.
 
 ### Step 4: Spawn debugger session
 
