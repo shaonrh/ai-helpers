@@ -26,6 +26,11 @@ if [ -z "$CMD" ]; then
   exit 0
 fi
 
+read -r _t1 _t2 _t3 _ <<< "$CMD"
+if [ "$_t1" != "gh" ] || [ "$_t2" != "pr" ] || [ "$_t3" != "create" ]; then
+  exit 0
+fi
+
 ERRORS=()
 
 # --- Check 1: PR title matches CI-enforced regex ---
