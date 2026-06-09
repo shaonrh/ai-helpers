@@ -14,6 +14,10 @@ workflow as a continuous state machine.
 | `/dev:poll` | Stateful PR poller for CI, reviews, and feedback |
 | `/dev:ci` | Quick CI status check |
 | `/dev:backport` | Trigger cherry-pick robot for backporting |
+| `/dev:grill-with-docs` | Stress-test a plan against domain model and docs |
+| `/dev:to-prd` | Turn conversation context into a PRD |
+| `/dev:to-issues` | Break a plan into vertical-slice issue files |
+| `/dev:handoff` | Compact conversation into a handoff document |
 
 ## Commands
 
